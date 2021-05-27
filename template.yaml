@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+  CovidBucketName: 
+    Default: 'covid-project-testing'
+    Description: S3 bucket to store the csv file with covid cases.
+    Type: String
+  CountyUrl: 
+    Default: 'https://covid19-us-api.herokuapp.com/county'
+    Description: URL with covid-19 data in Counties in USA.
+    Type: String
+  StateUrl: 
+    Default: 'https://covidtracking.com/api/states/daily'
+    Description: URL with covid-19 data in Counties in USA.
+    Type: String
+  ZipUrl: 
+    Default: "https://services2.arcgis.com/w657bnjzrjguNyOy/arcgis/rest/services/covid19_by_zip_expanded_1/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json"
+    Description: URL with covid-19 data in ZipCodes in Missouri.
+    Type: String
+  AlexaSkillID:
+    Default: "amzn1.ask.skill.e3a39d69-2f2f-4458-8ea8-367207ab5789"
+    Description: Alexa skill ID
+    Type: String
+
+Resources:
+  CovidLambdaLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: CovidFuncitonLayer
+      Description: Layer for pandas, numpy, requests and os libraries.
+      ContentUri: ./Layers
+      CompatibleRuntimes:
+        - python3.6
+      RetentionPolicy: Retain
+
+  CovidLambdaSMSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: '+15512275351'
+          Protocol: sms
+        # - Endpoint: '+12163528981'
+        #   Protocol: sms
+  
+
+
+  CovidFunctionRole:
+      Type: AWS::IAM::Role
+      Properties:
+        Path: /
+        RoleName: Covid-Function-Role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: Covid-Function-Policy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow 
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: "*"
+                - Effect: Allow
+                  Action: 
+                    - sns:Publish
+                  Resource: "*"
+                - Effect: "Allow"
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                    - s3:GetBucketLocation
+                    - s3:GetObjectVersion
+                    - s3:PutObject
+                    - s3:PutObjectAcl
+                    - s3:GetLifecycleConfiguration
+                    - s3:PutLifecycleConfiguration
+                    - s3:DeleteObject
+                  Resource:
+                    - !Sub "arn:aws:s3:::${CovidBucketName}"
+                    - !Sub "arn:aws:s3:::${CovidBucketName}/*"
+                   
+
+  CovidLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: 'Covid-Lambda'
+      Runtime: python3.6
+      CodeUri: code/
+      Handler: lambda_function.lambda_handler
+      Timeout: 220
+      MemorySize: 512
+      Layers:
+        - !Ref CovidLambdaLayer
+      Role: !GetAtt CovidFunctionRole.Arn
+      Environment:
+        Variables: 
+          bucket: !Ref CovidBucketName
+          sns_sms: !Ref CovidLambdaSMSTopic
+          County_url: !Ref CountyUrl
+          MO_url: !Ref StateUrl
+          Zip_url: !Ref ZipUrl
+  
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CovidLambda 
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CovidLambdaScheduledRule.Arn
+
+
+  AlexaLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: 'Covid-Lambda-Alexa-Skill'
+      Runtime: python3.6
+      CodeUri: code/
+      Handler: alexa_lambda_function.lambda_handler
+      Timeout: 220
+      MemorySize: 512
+      Layers:
+        - !Ref CovidLambdaLayer
+      Role: !GetAtt CovidFunctionRole.Arn
+      Environment:
+        Variables: 
+          bucket: !Ref CovidBucketName
+
+  
+
+  AlexaLambdaInvokePermisson:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref AlexaLambda
+      EventSourceToken: !Ref AlexaSkillID
+      Principal: 'alexa-appkit.amazon.com'
+
+  CovidLambdaScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: 'CovidLambda-scheduled-rule'
+      ScheduleExpression: cron(15 5 * * ? *) # Daily 23:15 pm cst i.e 4:15 am in UTC
+      #ScheduleExpression: cron(0/3 * * * ? *) # Every 3 mins
+      State: ENABLED
+      Targets: 
+        - 
+          Arn: !GetAtt CovidLambda.Arn
+          Id: AWSCovidFunction
+
+  
+  
+  
+        
+
+
+
